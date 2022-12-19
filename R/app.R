@@ -467,7 +467,7 @@ SpecexR_app <- function(...) {
 
                                                 style = "margin-top: 25px;"),
                                               tags$hr(),
-                                              fluidRow(  column(5, actionButton("drawpoly", h2("Draw ROI polygon"),
+                                              fluidRow(  column(6, actionButton("drawpoly", h2("Draw ROI polygon"),
                                                                                 class="primary"),
                                                                 p("Click the button to draw an ROI region")),
                                                          tags$head(tags$style("#drawpoly{color: black;
@@ -478,7 +478,7 @@ SpecexR_app <- function(...) {
                                  }"
                                                          )
                                                          ),
-                                                         column(5,  actionButton("statdata", h2("Start segmentation"),
+                                                         column(6,  actionButton("statdata", h2("Start segmentation"),
                                                                                  class="primary"),
                                                                 p("Click start to do indivitual tree dectection and segmentation")
                                                          ),
