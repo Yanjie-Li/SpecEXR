@@ -10,7 +10,6 @@
 #' @examples  none
 #'
 
-SpecexR_app <- function(...) {
 
 
 library(shiny)
@@ -19,78 +18,403 @@ library(htmltools)
 library(shinyjs)
 library(shinyWidgets)
 library(shinythemes)
+  packages <- c("shinythemes",'shinyjs', 'RCSF','DT',"shinydashboard",'stars',
+                'sfheaders','sf','exactextractr', 'lidR', "shiny",'tidyverse',
+                'RStoolbox','viridis', 'rgdal','tictoc','pls',
+                'raster','rdrop2','tools','rasterVis','data.table',
+                "librarian","shinydashboard","tictoc",'BiocManager','quickPlot','pacman')
+  new.packages <- packages[!(packages %in% utils::installed.packages()[,"Package"])]
+  if(length(new.packages)) utils::install.packages(new.packages,repos = "https://cloud.r-project.org")
 
 
-data1 <- readr::read_rds(system.file("extdata", "data.rds", package = "SpecEXR"))
-month <- (unique(data1$month))
-fam <- (unique(data1$Fam))
+  tictoc::tic()
+  # Packages loading
+  if (!require("EBImage", quietly = TRUE))
+    BiocManager::install('EBImage')
+  if (!require("Biobase", quietly = TRUE))
+    BiocManager::install("Biobase")
+  librarian::shelf(c(packages,'Biobase'),quiet = T)
+  tictoc::toc()
 
-ras_im_alin <- function(monthi,fami){
+  print('data read time')
+  raster_read  <- function(url) {
+    lapply(url, function(urll){
+      imag <- list.files(
+        path = urll,
+        pattern = '.tif',
+        all.files = T,
+        full.names = T,
+        no.. = T
+      )
+      imag <- list(imag)
+      lapply(imag, function(z)
+        expr <- tryCatch({
+          library(raster)
+          tictoc::tic()
+          p_dsm <-  raster::raster(z[grepl('dsm|Dsm', z)][1])
+          p_blue <- raster::raster(z[grepl('Blue|blue', z)])
+          p_green <- raster::raster(z[grepl('Green|green', z)])
+          p_red <- raster::raster(z[grepl('Red|red', z)][1])
+          p_redege <- raster::raster(z[grepl('dge|dge', z)])
+          p_nir <-raster:: raster(z[grepl('NIR|nir', z)])
+          p_dsm <- projectRaster(p_dsm, crs='+proj=longlat +datum=WGS84 +no_defs')
+          p_dsm <- terra::resample(p_dsm,p_blue, method = 'ngb')
+          trainx <- list(p_red,p_blue,p_green,p_redege,p_nir,p_dsm )
+          names(trainx) <- c('red',"blue", "green",'redege','nir','dsm')
+          tictoc::toc()
+          return(trainx)
+        },
+        error = function(e) {
+          message('Caught an error!')
+          cat("ERROR :", conditionMessage(e), "\n")
+          print(e)
+        },
+        print(paste("processing Loop", z, sep = "_"))))})}
+
+  ###################
+  multi_rasl <- function(las_list, dsf_list, kwsindice, hmin) {
+    lapply(las_list, function(ctg) {
+      expr <- tryCatch({
+        library("lidR")
+        library("rgdal")
+        library(sfheaders)
+        library(stars)
+
+        library(tidyverse)
+        library(sf)
+        library(data.table)
+        tictoc::tic("processing las file")
+        tictoc::tic("processing rasterize_terrain")
+        opt_output_files(ctg) <-
+          paste0(tempdir(), kwsindice, hmin , "{*}_hd")
+        opt_chunk_size(ctg) <- 0
+        opt_chunk_buffer(ctg) <- 10
+        classified_ctg <- classify_ground(ctg, csf())
+        dtm <- rasterize_terrain(classified_ctg, 0.5, tin())
+        tictoc::toc()
+        tictoc::tic("processing normalize_height")
+        ctg_norm <- normalize_height(classified_ctg, dtm)
+        opt_select(ctg_norm) <- "xyz"
+        opt_filter(ctg_norm) <- "-keep_first"
+        tictoc::toc()
+        tictoc::tic("processing locate_trees")
+        opt_output_files(ctg_norm) <- ''
+        ttops <- locate_trees(ctg_norm, lmf(ws = kwsindice , hmin = hmin))
+        chm <- rasterize_canopy(ctg_norm, 0.5, p2r(0.15))
+        tictoc::toc()
+        tictoc::tic("processing segment_trees")
+        opt_output_files(ctg_norm) <- paste0(tempdir(), kwsindice, hmin)
+        algo <- dalponte2016(chm, ttops)
+        ctg_segmented <- segment_trees(ctg_norm, algo)
+        tictoc::toc()
+
+        tictoc::tic("processing crown_metrics")
+        opt_output_files(ctg_segmented) <- ''
+        crown_polo = crown_metrics(ctg_segmented, func = .stdtreemetrics, geom = "convex")
+        tictoc::toc()
+        directions_longlat <- st_transform(crown_polo, '+proj=longlat +datum=WGS84 +no_defs')
+        tictoc::toc()
+        tictoc::tic("processing chm2")
+        sf  <- st_as_sf(directions_longlat)
+        sf33 <- as.data.frame(crown_polo)
+        sf33 <-sf33 %>% dplyr::select(treeID, Z, convhull_area) %>% as.data.frame()
+        dtm2 <-terra::project(dtm, '+proj=longlat +datum=WGS84 +no_defs')
+        chm2 <- terra::project(chm, '+proj=longlat +datum=WGS84 +no_defs')
+        tictoc::toc()
+        library(data.table)
+        library(terra)
+        tictoc::tic("processing resample")
+        low <- rast(dsf_list[[1]][[1]])
+        chm23 <-  terra::resample(chm2, low, method = 'near')
+        tictoc::toc()
+        tictoc::tic("processing exact_extract")
+        library(exactextractr)
+        prec_chm <- exactextractr::exact_extract(chm23, sf, include_xy = T) %>%
+          setNames(paste0(sf$treeID,"_",sf$convhull_area,"_")) %>%
+          invoke(rbind, .) %>%
+          dplyr::select(1:3) %>%
+          as.data.frame()
+        names(prec_chm)[1] <- 'Z'
+
+        tictoc::toc()
+        tictoc::tic("processing spectra exact_extract")
+        fd1 <- dsf_list[names(dsf_list) == ctg$type]
+
+        tesst <-  lapply(fd1, function(x11) {
+          x22 <- list(unlist(x11))
+          lapply(x22, function(ls11) {
+            lapply(ls11, function(ls222) {
+              tryCatch({
+                library(tictoc)
+                tic("for loop start")
+                message(paste0(names(ls222)))
+                print(ls222)
+                sp::plot(ls222)
+                sp::plot(sf,
+                         add = T,
+                         alpha = 0.6,
+                         col = rainbow(1))
+                library(exactextractr)
+                prec_dfs <- exactextractr::exact_extract(ls222, sf, include_xy = T) %>%
+                  setNames(paste0(sf$treeID,"_",sf$convhull_area,"_")) %>%
+
+                  invoke(rbind, .) %>%
+                  dplyr::select(1) %>%
+                  as.data.frame()
+                names(prec_dfs)  <- names(ls222)
+                print("finished")
+                toc()
+                return(prec_dfs)
+              },
+              error = function(e) {
+                message('Caught an error!')
+                cat("ERROR :", conditionMessage(e), "\n")
+                print(e)
+              })
+            })
+          })
+        }) %>% unlist(recursive = F)  %>% as.data.frame()
+        tictoc::toc()
+
+        tictoc::toc()
+        rownames(tesst)
+
+        tesst <- tesst[rownames(prec_chm), ]
+        dat_tes <- cbind(tesst, prec_chm)
+        dat_tes <-  dat_tes %>% mutate(treeID =  sapply(strsplit(rownames(dat_tes), '[_]'), function(x) {
+          y = x[1]}))
+        dat_tes <-  dat_tes %>% mutate(area =  sapply(strsplit(rownames(dat_tes), '[_]'), function(x) {
+          y = x[2]}))
+        return(dat_tes)
+
+      }, error = function(e) {
+        message('Caught an error!')
+        cat("ERROR :", conditionMessage(e), "\n")
+        print(e)
+      },
+      print(paste(
+        "processing Loop", names(las_list), sep = "_"
+      )))
+    })
+  }
+
+
+
+  debug_msg <- function(...) {
+    is_local <- Sys.getenv('SHINY_PORT') == ""
+    in_shiny <- !is.null(shiny::getDefaultReactiveDomain())
+    txt <- toString(list(...))
+    if (is_local) message(txt)
+    if (in_shiny) shinyjs::runjs(sprintf("console.debug(\"%s\")", txt))
+  }
+
   data1 <- readr::read_rds(system.file("extdata", "data.rds", package = "SpecEXR"))
 
-  expr <- tryCatch({
-    library(tidyverse)
-    library(raster)
-    library(EBImage)
-    library(tools)
-    nir <- filter(data1, month == monthi )
-    nir2 <- filter(nir, Fam == fami )
-    nir3 <- nir2[,-c(1:4)]
-    chl <- nir2[,4]
-    library(tidyverse)
-    matou_vis <- nir3 %>% dplyr:: mutate(
-      ndvi=  ((result_NIR - result_Red) / (result_NIR + result_Red)),
-      osavi = ((result_NIR-result_Red)*(1+0.16)) / (result_NIR + result_Red + 0.16),
-      gndvi = (result_NIR-result_Green)/(result_NIR+result_Green),
-      savi = ((result_NIR - result_Red)*(1+0.5))/((result_NIR + result_Red+0.5)),
-      msavi = (2*result_NIR+1-sqrt((2*result_NIR+1)^2-8*(result_NIR-result_Red)))/2,
-      gci = result_NIR/result_Green-1,
-      RECI = result_NIR/result_RedEdge-1,
-      LCI = (result_NIR-result_RedEdge)/(result_NIR+result_Red),
-      GRVI =(result_Green-result_Red)/(result_Green+result_Red),
-      MGRVI =(result_Green^2-result_Red^2)/(result_Green^2+result_Red^2 ),
-      RGBVI =(result_Green^2-result_Red*result_Blue)/(result_Green^2+result_Red*result_Blue),
-      NDRE= (result_NIR-result_RedEdge)/(result_NIR+result_RedEdge),
-      MACI= result_NIR/result_Green,
-      ARI= result_Green/result_NIR,
-      MARI=(result_Green^(-1)-result_RedEdge^(-1))/result_NIR
+  ras_im_alin <- function(monthi,fami){
+    data1 <- readr::read_rds(system.file("extdata", "data.rds", package = "SpecEXR"))
 
-    )
-
-    tryCatch({
+    expr <- tryCatch({
+      library(tidyverse)
       library(raster)
-      nir2 <- sapply(matou_vis[,-c(1:2,8:9)], function(x) (x - min(x, na.rm = T)) / (max(x, na.rm = T) - min(x, na.rm=T)))
+      library(EBImage)
+      library(tools)
+      nir <- filter(data1, month == monthi )
+      nir2 <- filter(nir, Fam == fami )
+      nir3 <- nir2[,-c(1:4)]
+      chl <- nir2[,4]
+      library(tidyverse)
+      matou_vis <- nir3 %>% dplyr:: mutate(
+        ndvi=  ((result_NIR - result_Red) / (result_NIR + result_Red)),
+        osavi = ((result_NIR-result_Red)*(1+0.16)) / (result_NIR + result_Red + 0.16),
+        gndvi = (result_NIR-result_Green)/(result_NIR+result_Green),
+        savi = ((result_NIR - result_Red)*(1+0.5))/((result_NIR + result_Red+0.5)),
+        msavi = (2*result_NIR+1-sqrt((2*result_NIR+1)^2-8*(result_NIR-result_Red)))/2,
+        gci = result_NIR/result_Green-1,
+        RECI = result_NIR/result_RedEdge-1,
+        LCI = (result_NIR-result_RedEdge)/(result_NIR+result_Red),
+        GRVI =(result_Green-result_Red)/(result_Green+result_Red),
+        MGRVI =(result_Green^2-result_Red^2)/(result_Green^2+result_Red^2 ),
+        RGBVI =(result_Green^2-result_Red*result_Blue)/(result_Green^2+result_Red*result_Blue),
+        NDRE= (result_NIR-result_RedEdge)/(result_NIR+result_RedEdge),
+        MACI= result_NIR/result_Green,
+        ARI= result_Green/result_NIR,
+        MARI=(result_Green^(-1)-result_RedEdge^(-1))/result_NIR
 
-      matou_vis2 <- cbind.data.frame(matou_vis[, c(1:2)], nir2)
-      spg <- matou_vis2
-      coordinates(spg) <- ~ x + y
-      gridded(spg) <- TRUE
-      rasterDF <- stack(spg)
-      library(RStoolbox)
-      library(rasterVis)
-      library(viridis)
-      df <-  ggRGB(rasterDF, r=1, g=5, b=3, stretch = 'lin')+ggtitle(paste0(monthi,"_", fami ))
-      print(df)
-      imgg <-raster:: as.array(rasterDF )
-      ds3 <- EBImage::as.Image(imgg)
-      ds3 <- ds3[,,-c(1:2)]
-      ds4 <- resize(ds3,30,30)
-      f_name  <- list(ds4)
-      names(f_name) <- paste0(monthi,'_',fami)
-      f_namechl  <- list(chl)
-      names(f_namechl) <- paste0(monthi,'_chl_',fami)
-      message( paste0(monthi,'_',fami))
-      return(list(f_namechl,f_name))
-    },error = function(e) {NULL})
+      )
 
-  },error = function(e) {
-    message('Caught an error!')
-    cat("ERROR :", conditionMessage(e), "\n")
-    print(e)})
+      tryCatch({
+        library(raster)
+        nir2 <- sapply(matou_vis[,-c(1:2,8:9)], function(x) (x - min(x, na.rm = T)) / (max(x, na.rm = T) - min(x, na.rm=T)))
 
+        matou_vis2 <- cbind.data.frame(matou_vis[, c(1:2)], nir2)
+        spg <- matou_vis2
+        coordinates(spg) <- ~ x + y
+        gridded(spg) <- TRUE
+        rasterDF <- stack(spg)
+        library(RStoolbox)
+        library(rasterVis)
+        library(viridis)
+        df <-  ggRGB(rasterDF, r=1, g=5, b=3, stretch = 'lin')+ggtitle(paste0(monthi,"_", fami ))
+        print(df)
+        imgg <-raster:: as.array(rasterDF )
+        ds3 <- EBImage::as.Image(imgg)
+        ds3 <- ds3[,,-c(1:2)]
+        ds4 <- resize(ds3,30,30)
+        f_name  <- list(ds4)
+        names(f_name) <- paste0(monthi,'_',fami)
+        f_namechl  <- list(chl)
+        names(f_namechl) <- paste0(monthi,'_chl_',fami)
+        message( paste0(monthi,'_',fami))
+        return(list(f_namechl,f_name))
+      },error = function(e) {NULL})
+
+    },error = function(e) {
+      message('Caught an error!')
+      cat("ERROR :", conditionMessage(e), "\n")
+      print(e)})
+
+  }
+
+
+
+  month <- (unique(data1$month))
+  fam <- (unique(data1$Fam))
+
+  library(DT)
+
+ css<- "body {
+  font-size: 14px;
+  font-family: 'Open Sans', sans-serif;
 }
 
-library(DT)
+.nav > li > a {
+  color:  white !important;
+  background-color: #ff8c00 !important;
+  font-size: 16px;
+}
+.nav-tabs > li > a {
+  color:  white !important;
+  background-color: #ff8c00 !important;
+  font-size: 16px;
+}
+
+
+
+.nav-tabs > li > a:active
+.nav-tabs>li>a:hover,
+.nav-tabs>li>a:focus
+{
+   background-color: #ffb3e6 !important;
+}
+
+.nav > li > a:active,
+.nav > li > a:hover,
+.nav > li > a:focus {
+   background-color: #ffb3e6 !important;
+}
+
+
+.title {
+  color: white;
+  font-size: 24px !important;
+  background-color: #ff8c00 !important;
+}
+
+.nav-tabs > li > a {
+  color: #FFFFFF;
+  background-color: #1f7a8c;
+}
+
+.main-header {
+  background-color: #1f7a8c !important;
+}
+
+.main-sidebar {
+  background-color: #334f70 !important;
+}
+
+.content-wrapper,
+.right-side {
+  background-color: #f5f5f5 !important;
+}
+
+.content-wrapper {
+  padding-top: 15px !important;
+}
+
+.sidebar-menu > li > a {
+  color: #c7d0d9 !important;
+  font-weight: bold !important;
+  font-size: 16px !important;
+}
+
+.sidebar-menu > li.active > a {
+  background-color: #1c4f6d !important;
+  color: #c2dd34 !important;
+  font-size: 16px !important;
+}
+
+.nav-tabs > li > a {
+  background-color: #1c4f6d;
+  color: #fff;
+  font-size: 20px;
+}
+
+.treeview-menu > li > a {
+  background-color: #1c4f6d;
+  color: #c7d0d9 !important;
+  font-weight: bold !important;
+  font-size: 13px !important;
+}
+
+.navbar-default .navbar-brand {
+  color: #FFFFFF;
+  background-color: #1f7a8c !important;
+}
+
+.treeview-menu > li.active > a {
+  background-color: #1f7a8c !important;
+}
+
+.tab-content {
+  background-color: #F7F7F7;
+}
+
+.small-box {
+  background-color: #fff !important;
+  border-radius: 2px !important;
+  border: 1px solid #d2d6de !important;
+}
+
+.small-box .icon {
+  border-radius: 50% !important;
+  padding: 10px !important;
+  font-size: 24px !important;
+  color: #1f7a8c !important;
+}
+
+.small-box h3 {
+  font-size: 28px !important;
+  font-weight: bold !important;
+  margin: 0 !important;
+}
+
+.small-box p {
+  font-size: 14px !important;
+  margin: 0 !important;
+}
+"
+
+
+
+
+
+
+
+
+
+
+
 # Define the UI
 ui <- dashboardPage(
   skin = "blue",
@@ -168,10 +492,11 @@ ui <- dashboardPage(
     )
   ),
   dashboardBody(
-    tags$head(
-      tags$link(rel = "stylesheet", type = "text/css", href = "style.css")
-    ),
-    # tags$head(tags$style(HTML(css))),
+    # includeCSS("www/style.css"),
+    # tags$head(
+    #   tags$link(rel = "stylesheet", type = "text/css", href = "style.css")
+    # ),
+    tags$head(tags$style(HTML(css))),
 
     useShinyjs(),
     tabItems(
@@ -186,7 +511,7 @@ ui <- dashboardPage(
             # height = "500px",
             width = 12,
             fluidPage(
-              tags$img(src="tree se.png", width = "1000px", height = "800px")
+              tags$img(src="www/treese.png", width = "1000px", height = "800px")
               # 在src中，你需要提供你想要引用的图片的url或者本地路径
             )
           )
@@ -991,59 +1316,7 @@ ui <- dashboardPage(
             )
           )
         )
-      ),
-
-
-
-      tabItem(
-        tabName = "general",
-        navbarPage(
-          "Extra Page 1",
-          tabPanel(
-            "Tab 1",
-            fluidRow(
-              box(
-                title = "Extra Page 1 - Tab 1",
-                status = "primary",
-                solidHeader = TRUE,
-                collapsible = TRUE,
-                width = 12,
-                height = "500px",
-                "This is the content of Extra Page 1 - Tab 1."
-              )
-            )
-          ),
-          tabPanel(
-            "Tab 2",
-            fluidRow(
-              box(
-                title = "Extra Page 1 - Tab 2",
-                status = "primary",
-                solidHeader = TRUE,
-                collapsible = TRUE,
-                width = 12,
-                height = "500px",
-                "This is the content of Extra Page 1 - Tab 2."
-              )
-            )
-          )
-        )
-      ),
-      tabItem(
-        tabName = "user",
-        fluidRow(
-          box(
-            title = "user",
-            status = "primary",
-            solidHeader = TRUE,
-            collapsible = TRUE,
-            height = "500px",
-            width = 12,
-            "This is the dashboard pagedfdf."
-          )
-        )
-)
-
+      )
 
     )
   )
@@ -2231,9 +2504,6 @@ server <- function(input, output) {
 
 
 }
-# 运行Shiny App
 
 app <- shinyApp(ui = ui, server = server)
 runApp(app, launch.browser = TRUE)
-
-}
