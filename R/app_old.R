@@ -1,4 +1,3 @@
-
 #' SpecexR_app
 #'this is an shiny app mainly for multispectral extraction using LAS point cloud data
 #'
@@ -12,15 +11,22 @@
 #'
 
 SpecexR_app <- function(...) {
-  list.of.packages <- c("librarian","Biobase","shinydashboard","tictoc",'BiocManager','quickPlot')
-  new.packages <- list.of.packages[!(list.of.packages %in% utils::installed.packages()[,"Package"])]
+  packages <- c("shinythemes",'shinyjs', 'RCSF','DT',"shinydashboard",'stars',
+                'sfheaders','sf','exactextractr', 'lidR', "shiny",'tidyverse',
+                'RStoolbox','viridis', 'rgdal','tictoc','pls',
+                'raster','rdrop2','tools','rasterVis','data.table',
+                "librarian","shinydashboard","tictoc",'BiocManager','quickPlot','pacman')
+  new.packages <- packages[!(packages %in% utils::installed.packages()[,"Package"])]
   if(length(new.packages)) utils::install.packages(new.packages,repos = "https://cloud.r-project.org")
+
+
+  tictoc::tic()
+  # Packages loading
   if (!require("EBImage", quietly = TRUE))
     BiocManager::install('EBImage')
-  library("EBImage")
-  tictoc::tic()
-  librarian::shelf("shinythemes",'shinyjs', 'RCSF','DT',"shinydashboard",'stars', 'sfheaders', 'sf','exactextractr', 'lidR', "shiny",'tidyverse','RStoolbox','viridis',
-                   'raster','rdrop2','tools','rasterVis','data.table',quiet = T)
+  if (!require("Biobase", quietly = TRUE))
+    BiocManager::install("Biobase")
+  librarian::shelf(c(packages,'Biobase'),quiet = T)
   tictoc::toc()
 
   print('data read time')
@@ -34,7 +40,6 @@ SpecexR_app <- function(...) {
         no.. = T
       )
       imag <- list(imag)
-      # imag1 <-imag[-c(2,9)]
       lapply(imag, function(z)
         expr <- tryCatch({
           library(raster)
@@ -60,8 +65,8 @@ SpecexR_app <- function(...) {
         print(paste("processing Loop", z, sep = "_"))))})}
 
   ###################
-  multi_rasl <- function(las_list,dsf_list,kwsindice,hmin){
-    lapply(las_list, function(ctg){
+  multi_rasl <- function(las_list, dsf_list, kwsindice, hmin) {
+    lapply(las_list, function(ctg) {
       expr <- tryCatch({
         library("lidR")
         library("rgdal")
@@ -71,98 +76,83 @@ SpecexR_app <- function(...) {
         library(tidyverse)
         library(sf)
         library(data.table)
-        # message( paste0(ctg$gfdr))
-        tictoc:: tic("processing las file")
-        # opt_output_files(ctg) <- paste0(tempdir(), "{*}_ctgied")
-        # opt_chunk_size(ctg) <- 0
-        # opt_chunk_buffer(ctg) <- 40
-        # classified_ctg <- classify_ground(ctg, csf())
-        # dtm <- rasterize_terrain(classified_ctg, 1, tin())
-        #
-        tictoc:: tic("processing rasterize_terrain")
-        opt_output_files(ctg) <- paste0(tempdir(),kwsindice,hmin , "{*}_hd")
+        tictoc::tic("processing las file")
+        tictoc::tic("processing rasterize_terrain")
+        opt_output_files(ctg) <-
+          paste0(tempdir(), kwsindice, hmin , "{*}_hd")
         opt_chunk_size(ctg) <- 0
         opt_chunk_buffer(ctg) <- 10
         classified_ctg <- classify_ground(ctg, csf())
         dtm <- rasterize_terrain(classified_ctg, 0.5, tin())
         tictoc::toc()
-        tictoc:: tic("processing normalize_height")
+        tictoc::tic("processing normalize_height")
         ctg_norm <- normalize_height(classified_ctg, dtm)
         opt_select(ctg_norm) <- "xyz"
         opt_filter(ctg_norm) <- "-keep_first"
-        # hmean3 <- pixel_metrics(ctg_norm, ~mean(Z), 0.5)
         tictoc::toc()
-
-        # plot(hmean3, col = height.colors(25))
-        # opt_output_files(ctg) <- paste0(tempdir(), kwsindice,hmin , "{*}_spjhd")
-        tictoc:: tic("processing locate_trees")
+        tictoc::tic("processing locate_trees")
         opt_output_files(ctg_norm) <- ''
-        ttops <- locate_trees(ctg_norm, lmf(ws= kwsindice , hmin = hmin))
+        ttops <- locate_trees(ctg_norm, lmf(ws = kwsindice , hmin = hmin))
         chm <- rasterize_canopy(ctg_norm, 0.5, p2r(0.15))
         tictoc::toc()
-
-        # plot(chm, col = height.colors(50))
-        tictoc:: tic("processing segment_trees")
-        opt_output_files(ctg_norm) <-paste0(tempdir(),kwsindice,hmin)
+        tictoc::tic("processing segment_trees")
+        opt_output_files(ctg_norm) <- paste0(tempdir(), kwsindice, hmin)
         algo <- dalponte2016(chm, ttops)
         ctg_segmented <- segment_trees(ctg_norm, algo)
         tictoc::toc()
 
-        tictoc:: tic("processing crown_metrics")
+        tictoc::tic("processing crown_metrics")
         opt_output_files(ctg_segmented) <- ''
         crown_polo = crown_metrics(ctg_segmented, func = .stdtreemetrics, geom = "convex")
-        # plot(sf::st_geometry(crown_polo), col = pastel.colors(250), axes = T)
         tictoc::toc()
-
-        directions_longlat <-  st_transform(crown_polo, '+proj=longlat +datum=WGS84 +no_defs')
+        directions_longlat <- st_transform(crown_polo, '+proj=longlat +datum=WGS84 +no_defs')
         tictoc::toc()
-        tictoc:: tic("processing chm2")
+        tictoc::tic("processing chm2")
         sf  <- st_as_sf(directions_longlat)
         sf33 <- as.data.frame(crown_polo)
-        sf33 <- sf33%>%dplyr:: select(treeID,Z,convhull_area)%>% as.data.frame()
-        dtm2 <- terra::project(dtm, '+proj=longlat +datum=WGS84 +no_defs')
+        sf33 <-sf33 %>% dplyr::select(treeID, Z, convhull_area) %>% as.data.frame()
+        dtm2 <-terra::project(dtm, '+proj=longlat +datum=WGS84 +no_defs')
         chm2 <- terra::project(chm, '+proj=longlat +datum=WGS84 +no_defs')
         tictoc::toc()
         library(data.table)
         library(terra)
-        # fd1 <- dsf_list
-        # [names(dsf_list) ==ctg$gfdr]
-        tictoc:: tic("processing resample")
-        low <- rast(dsf_list[[1]][[1]] )
-        chm23 <-  terra::resample(chm2,low, method = 'near')
-        # plot(chm23, col = height.colors(50))
-        # plot(chm2, col = height.colors(50))
+        tictoc::tic("processing resample")
+        low <- rast(dsf_list[[1]][[1]])
+        chm23 <-  terra::resample(chm2, low, method = 'near')
         tictoc::toc()
-        tictoc:: tic("processing exact_extract")
+        tictoc::tic("processing exact_extract")
         library(exactextractr)
-        prec_chm <- exactextractr::exact_extract(chm23, sf, include_xy=T) %>%
-          setNames(sf$treeID ) %>%
-          invoke(rbind,.)%>%
-          dplyr:: select(1:3) %>%
+        prec_chm <- exactextractr::exact_extract(chm23, sf, include_xy = T) %>%
+          setNames(paste0(sf$treeID,"_",sf$convhull_area,"_")) %>%
+          invoke(rbind, .) %>%
+          dplyr::select(1:3) %>%
           as.data.frame()
-        names(prec_chm)[1] <- 'chm'
-        prec_chm <-  prec_chm %>%
-          mutate(treeID =  sapply(strsplit( rownames(prec_chm),'[.]'), function(x){
-            y=x[1]
-          }))
+        names(prec_chm)[1] <- 'Z'
+
         tictoc::toc()
-        tictoc:: tic("processing spectra exact_extract")
-        tesst <-  lapply(dsf_list, function(x11){
-          x22 <-list(unlist(x11))
-          lapply(x22, function(ls11){
-            lapply(ls11, function(ls222){
+        tictoc::tic("processing spectra exact_extract")
+        fd1 <- dsf_list[names(dsf_list) == ctg$type]
+
+        tesst <-  lapply(fd1, function(x11) {
+          x22 <- list(unlist(x11))
+          lapply(x22, function(ls11) {
+            lapply(ls11, function(ls222) {
               tryCatch({
                 library(tictoc)
                 tic("for loop start")
-                message( paste0(names(ls222)))
+                message(paste0(names(ls222)))
                 print(ls222)
                 sp::plot(ls222)
-                sp::plot(sf,add=T, alpha=0.6,col=rainbow(1))
+                sp::plot(sf,
+                         add = T,
+                         alpha = 0.6,
+                         col = rainbow(1))
                 library(exactextractr)
-                prec_dfs <- exactextractr::exact_extract(ls222, sf, include_xy=T) %>%
-                  setNames(sf$treeID ) %>%
-                  invoke(rbind,.)%>%
-                  dplyr:: select(1) %>%
+                prec_dfs <- exactextractr::exact_extract(ls222, sf, include_xy = T) %>%
+                  setNames(paste0(sf$treeID,"_",sf$convhull_area,"_")) %>%
+
+                  invoke(rbind, .) %>%
+                  dplyr::select(1) %>%
                   as.data.frame()
                 names(prec_dfs)  <- names(ls222)
                 print("finished")
@@ -172,26 +162,36 @@ SpecexR_app <- function(...) {
               error = function(e) {
                 message('Caught an error!')
                 cat("ERROR :", conditionMessage(e), "\n")
-                print(e)}
-
-              )
+                print(e)
+              })
             })
           })
-        }) %>% unlist(recursive = F)  %>%as.data.frame()
+        }) %>% unlist(recursive = F)  %>% as.data.frame()
         tictoc::toc()
 
         tictoc::toc()
-        tesst <- tesst[rownames(prec_chm),]
-        dat_tes <- cbind(tesst,prec_chm)
+        rownames(tesst)
+
+        tesst <- tesst[rownames(prec_chm), ]
+        dat_tes <- cbind(tesst, prec_chm)
+        dat_tes <-  dat_tes %>% mutate(treeID =  sapply(strsplit(rownames(dat_tes), '[_]'), function(x) {
+          y = x[1]}))
+        dat_tes <-  dat_tes %>% mutate(area =  sapply(strsplit(rownames(dat_tes), '[_]'), function(x) {
+          y = x[2]}))
         return(dat_tes)
 
-      },error = function(e) {
+      }, error = function(e) {
         message('Caught an error!')
         cat("ERROR :", conditionMessage(e), "\n")
-        print(e)},
-      print(paste("processing Loop", names(las_list), sep = "_")))
+        print(e)
+      },
+      print(paste(
+        "processing Loop", names(las_list), sep = "_"
+      )))
     })
   }
+
+
 
   debug_msg <- function(...) {
     is_local <- Sys.getenv('SHINY_PORT') == ""
@@ -201,10 +201,10 @@ SpecexR_app <- function(...) {
     if (in_shiny) shinyjs::runjs(sprintf("console.debug(\"%s\")", txt))
   }
 
-  data1 <- readr::read_rds(system.file("extdata", "data.rds", package = "SpectrEXR"))
+  data1 <- readr::read_rds(system.file("extdata", "data.rds", package = "SpecEXR"))
 
   ras_im_alin <- function(monthi,fami){
-    data1 <- readr::read_rds(system.file("extdata", "data.rds", package = "SpectrEXR"))
+    data1 <- readr::read_rds(system.file("extdata", "data.rds", package = "SpecEXR"))
 
     expr <- tryCatch({
       library(tidyverse)
@@ -311,9 +311,6 @@ SpecexR_app <- function(...) {
                                    tabsetPanel(type = "tabs",
                                                tabPanel("image info", verbatimTextOutput("summary")),
                                                tabPanel("Data", verbatimTextOutput("summary2"))
-                                               # tabPanel("Layer plot",plotOutput('distPlot',width = "100%", height = "800px"))
-
-
                                    )
                                  )
                                )
@@ -332,10 +329,10 @@ SpecexR_app <- function(...) {
                                                  4,
                                                  fileInput(
                                                    "red1",
-                                                   "Please upload an red images ",
-                                                   multiple = T,
-                                                   accept = c("tif",
-                                                              ".tif")
+                                                         "Please upload an red images ",
+                                                         multiple = T,
+                                                         accept = c("tif",
+                                                                    ".tif")
                                                  )
                                                ),
                                                column(
@@ -352,10 +349,10 @@ SpecexR_app <- function(...) {
                                                  4,
                                                  fileInput(
                                                    "blue1",
-                                                   "Please upload a blue images ",
-                                                   multiple = T,
-                                                   accept = c("tif",
-                                                              ".tif")
+                                                          "Please upload a blue images ",
+                                                          multiple = T,
+                                                          accept = c("tif",
+                                                                     ".tif")
                                                  )
                                                ),
                                                column(
@@ -418,15 +415,10 @@ SpecexR_app <- function(...) {
 
                                                )),
                                                fluidRow(
-                                                 # column(4, numericInput("width_png2","Width of PNG", value = 1600)) ,
-                                                 # column(4, numericInput("height_png2","Height of PNG", value = 1200 )),
-                                                 # column(4, numericInput("resolution_PNG2","Resolution of PNG", value = 144 )),
-                                                 # column(4, numericInput("width_pdf","Width of pdf", value = 16)) ,
-                                                 # column(4, numericInput("height_pdf","Height of pdf", value = 12 )),
 
                                                  style = "margin-top: 25px;",
                                                  wellPanel(column(6,downloadButton('downloadPlotPNG11','Download single layer TIF')),
-                                                 column(6,downloadButton('downloadPlotPNG22','Download RGB TIF')))
+                                                           column(6,downloadButton('downloadPlotPNG22','Download RGB TIF')))
                                                )
 
 
@@ -436,10 +428,10 @@ SpecexR_app <- function(...) {
                                   mainPanel(
 
                                     splitLayout(
-                                    style = "border: 1px solid silver:",
-                                    plotOutput("plotgraph1" , width = "100%", height = "800px"),
-                                    plotOutput("plotgraph2", width = "100%", height = "800px")
-                                  )
+                                      style = "border: 1px solid silver:",
+                                      plotOutput("plotgraph1" , width = "100%", height = "800px"),
+                                      plotOutput("plotgraph2", width = "100%", height = "800px")
+                                    )
 
                                   )
                                 )
@@ -454,15 +446,13 @@ SpecexR_app <- function(...) {
                                titlePanel("Segmentation"),
                                sidebarLayout(
                                  sidebarPanel(width = 4,
-                                              column(6,fileInput("file1", "Choose las File",
+                                              column(6,fileInput("file1", "Choose point cloud File",
                                                                  multiple = FALSE,
-                                                                 accept = c("las",
-                                                                            ".las"))),
+                                                                 accept = c("las",".las",".laz",".ply"))),
 
                                               column(6,fileInput("file2", "Choose raster File",
                                                                  multiple = T,
-                                                                 accept = c("tif",
-                                                                            ".tif"))) ,
+                                                                 accept = c("tif", ".tif"))) ,
 
 
                                               # Horizontal line ----
@@ -502,7 +492,7 @@ SpecexR_app <- function(...) {
                                                          )
                                                          )),
                                               tags$hr(),
-                                               fluidRow(
+                                              fluidRow(
                                                 tabsetPanel(type = "tabs",
                                                             tabPanel("Point cloud information", verbatimTextOutput("summar"),
                                                                      verbatimTextOutput("sudra")),
@@ -534,24 +524,23 @@ SpecexR_app <- function(...) {
                                      "to start the extraction"),
 
                                    fluidRow( column(4,sliderInput(inputId = 'wscontro',
-                                                                        label = 'find tree ws control:',
-                                                                        value = 6,
-                                                                        step =0.1,
-                                                                        min =0 ,
-                                                                        max =10))  ,
-                                                #
-                                               column(4,sliderInput(inputId = 'hmincor',
-                                                                        label = 'find tree hmin control:',
-                                                                        value = 2,
-                                                                        step =0.1,
-                                                                        min =0 ,
-                                                                        max =10)),
-                                               column(4,sliderInput("select2",
-                                                           "TreeID number:",
-                                                           min = 1,
-                                                           max = 2000,
-                                                           step =1,
-                                                           value = 2 ) )
+                                                                  label = 'find tree ws control:',
+                                                                  value = 6,
+                                                                  step =0.1,
+                                                                  min =0 ,
+                                                                  max =10))  ,
+                                             column(4,sliderInput(inputId = 'hmincor',
+                                                                  label = 'find tree hmin control:',
+                                                                  value = 2,
+                                                                  step =0.1,
+                                                                  min =0 ,
+                                                                  max =10)),
+                                             column(4,sliderInput("select2",
+                                                                  "TreeID number:",
+                                                                  min = 1,
+                                                                  max = 2000,
+                                                                  step =1,
+                                                                  value = 2 ) )
 
 
                                    ) ,
@@ -566,17 +555,16 @@ SpecexR_app <- function(...) {
                                      plotOutput("predictPlo" , width = "100%", height = "800px" ),
 
                                      plotOutput("predictPlot5", width = "100%", height = "800px")
-                                    )),
+                                   )),
                                    fluidRow(
                                      column(6, downloadButton('downloadrgball',
-                                                               'Downloadrgb',class = "butt1")) ,
+                                                              'Downloadrgb',class = "butt1")) ,
 
-                                      column(6,  downloadButton('downloadsfall','Downloadshp',class = "butt1") )
+                                     column(6,  downloadButton('downloadsfall','Downloadshp',class = "butt1") )
 
 
                                    ),
 
-                                   # tableOutput("contents2"),
                                    tabsetPanel(type = "tabs",
 
                                                tabPanel("LAS polt information",
@@ -596,14 +584,11 @@ SpecexR_app <- function(...) {
                                                                                    max =10))
                                                           )
 
-                                                          ),
+                                                        ),
                                                         mainPanel( plotOutput("contents" , width = "100%", height = "800px"),
                                                                    tableOutput("contents33"),
-                                                                   # tableOutput("contents"),
                                                                    tableOutput("contents22"))),
 
-
-                                               # tabPanel("Magic",plotOutput('distPlo',width = "100%", height = "1000px")),
                                                tabPanel("Extraction and visualization",
                                                         wellPanel(fluidRow(
                                                           column(12,sliderInput(inputId = 'heightdata',
@@ -620,7 +605,6 @@ SpecexR_app <- function(...) {
                                                         ))),
 
                                                ),
-                                               # tabPanel("Single tree RGB plot",plotOutput('predictPlot4',width = "100%", height = "1000px")),
 
                                                tabPanel("Final data output",
 
@@ -638,11 +622,6 @@ SpecexR_app <- function(...) {
                              )
 
                     )
-
-
-
-
-
   )
 
 
@@ -763,11 +742,11 @@ SpecexR_app <- function(...) {
 
       )
 
-        library(raster)
-        nir2s <- sapply(matou_vis[,-c(1:2,8:9)], function(x) (x - min(x, na.rm = T)) / (max(x, na.rm = T) - min(x, na.rm=T)))
+      library(raster)
+      nir2s <- sapply(matou_vis[,-c(1:2,8:9)], function(x) (x - min(x, na.rm = T)) / (max(x, na.rm = T) - min(x, na.rm=T)))
 
-        matou_vis2 <- cbind.data.frame(nir2[, c(1:6,12:13)], nir2s)
-        matou_vis2
+      matou_vis2 <- cbind.data.frame(nir2[, c(1:6,12:13)], nir2s)
+      matou_vis2
     })
 
     output$predictPlot <- renderPlot({
@@ -791,7 +770,6 @@ SpecexR_app <- function(...) {
         return('please upload las cloud data')
       las_12 <- lapply(inFile$datapath,function(m){
         fdd <- lidR::readLAScatalog(m )
-        # fdd$gfdr <- 'month'
 
       } )
 
@@ -820,24 +798,17 @@ SpecexR_app <- function(...) {
 
     })
 
-    # hf <- terra::draw(x="polygon", id=T)
-    # df <- sf::st_as_sf(hf)
-    # subset3 <- lidR::clip_roi(ctg,df)
-    #
-    #
-
 
     adraw3 <- eventReactive(input$drawpoly, {
       withProgress(message = 'External window will open',
                    detail = 'please wait...', value = 0, {
-      sele <- adraw()
+                     sele <- adraw()
                    })
     })
 
     output$sudra  <- renderPrint({
       adraw5 <- adraw3()
       print(adraw5)
-      # sp::plot(adraw5, bg = "white", size = input$poinsize, axis = TRUE, legend = TRUE)
     })
 
     draw_cloud   <- reactive({
@@ -849,8 +820,8 @@ SpecexR_app <- function(...) {
     polyroi <- eventReactive(input$drawpolyroi, {
       withProgress(message = 'Ploting',
                    detail = 'May take a while...', value = 0, {
-       sele <- draw_cloud()
-      sele <- readLAS(sele)
+                     sele <- draw_cloud()
+                     sele <- readLAS(sele)
                    })
     })
 
@@ -863,11 +834,7 @@ SpecexR_app <- function(...) {
       print("plot with RGL device")
       rma <-  polyroi()
 
-
-      # lapy <- lapply(rma, function(x){
-        sp::plot(rma, bg = "white", size = input$poinsize, axis = TRUE, legend = TRUE)
-      # })
-      # lapy
+      sp::plot(rma, bg = "white", size = input$poinsize, axis = TRUE, legend = TRUE)
     })
 
 
@@ -925,34 +892,23 @@ SpecexR_app <- function(...) {
         return(print('please upload raster images')) } else{
           withProgress(message = 'Calculation in progress',
                        detail = 'This may take a while...', value = 0, {
-          plr <- lapply(inFile1$datapath, function(m){
-            rs <-terra::rast(m)
-           # if( terra::nlyr(rs)>1) stop('please use single layer tif files')
+                         plr <- lapply(inFile1$datapath, function(m){
+                           rs <-terra::rast(m)
 
-              if( !(terra::crs(rs,  proj=TRUE)) == '+proj=longlat +datum=WGS84 +no_defs' ){
-              message(paste('projectioning'))
-              tictoc::tic(print('projection'))
-              rs2 <- terra::project(rs, '+proj=longlat +datum=WGS84 +no_defs')
-              # rs2 <- rs
-              tictoc::toc()
-              rs2
-              # rs2 <- terra::ext(rs)
-              #
-              # rs2
+                           if( !(terra::crs(rs,  proj=TRUE)) == '+proj=longlat +datum=WGS84 +no_defs' ){
+                             message(paste('projectioning'))
+                             tictoc::tic(print('projection'))
+                             rs2 <- terra::project(rs, '+proj=longlat +datum=WGS84 +no_defs')
+                             tictoc::toc()
+                             rs2
 
-            } else{rs}
+                           } else{rs}
 
 
-          }) %>%   unlist(recursive = F)
-          # unlist(recursive = F) %>%  unlist(recursive = F)
+                         }) %>%    do.call(c,.)
 
-          # dsf1 <- dsf1 %>%  do.call(c,.)
-          # for (i in 1:length(plr)) {
-          #   names(plr[[i]]) <- inFile1$name[[i]]
-          # }
-          #
-          # plr
-            })
+                         plr
+                       })
         }
 
     })
@@ -968,9 +924,8 @@ SpecexR_app <- function(...) {
                      detail = 'please wait...', value = 0, {
 
                        dsf1 <-  getData()
-                       dsf1 <-  dsf1  %>%  do.call(c,.)
+                       dsf1 <-  dsf1
                        res <- terra::writeRaster(dsf1, filename=file,gdal=c("COMPRESS=DEFLATE", "TFW=YES"), overwrite=TRUE, datatype='INT1U')
-                       # print(res@file@name)
                      })
       }
 
@@ -1021,24 +976,6 @@ SpecexR_app <- function(...) {
 
     )
 
-    # data_las <- reactive({
-    #   select <-input$caption2
-    #   imag <- list.files(
-    #     path = select,
-    #     pattern = '*.las',
-    #     all.files = T,
-    #     full.names = T,
-    #     no.. = T
-    #   )
-    #   library("lidR")
-    #   library("rgdal")
-    #   library(raster)
-    #   library(tidyverse)
-    #   las_12 <-lidR:: readLAScatalog(imag[1],
-    #                           filter = "-change_classification_from_to 1 2",
-    #                           select = "xyzirc" )
-    # })
-
     output$summar  <- renderPrint({
       las22 <- df_products_upload()
       print(las22)
@@ -1060,172 +997,82 @@ SpecexR_app <- function(...) {
 
     output$summar2  <- renderPrint({
       dsf1 <-  getData()
-      dsf1 <-  dsf1  %>%  do.call(c,.)
       if (is.null(dsf1))
         return(NULL)
       print(dsf1)
 
     })
 
-    # output$distPlo <- renderPlot({
-    #   select23 <-  getData()
-    #   if (is.null(select23))
-    #     return(NULL)
-    #   sp::plot( stack(select23),col= viridis(200))
-    #
-    # })
-
-
-    # data_ext2  <- reactive({
-    #   dsf1 <- getData()
-    #
-    #   # dsf1 <- dsf1 %>%  do.call(c,.)
-    #   las_12 <- df_products_upload()
-    #   if (is.null(dsf1))
-    #     return('please upload raster images')
-    #   if (is.null(las_12))
-    #     return('please upload las cloud data')
-    #   las_list <- las_12
-    #   # names(las_list) <- c('month')
-    #   dsf_list <- list(dsf1)
-    #   # names(dsf_list) <- c('month')
-    #   par(mfrow = c(2,3))
-    #   data_all <- multi_rasl (las_list,dsf_list,kwsindice = input$wscontro, hmin = input$hmincor )
-    #
-    # })
-
-
-
 
 
     mult  <-  reactive({
       las_12 <- draw_cloud()
       las_list <- list(las_12)
-      # names(las_list) <- c('month')
-      # dsf1 <- getData()
-
-      # dsf_list <- list(dsf1)
-
       withProgress(message = 'Calculation in progress',
                    detail = 'This may take a while...', value = 0, {
-      lasdata <-   lapply(las_list, function(ctg){
-        expr <- tryCatch({
-          library("lidR")
-          library("rgdal")
-          library(sfheaders)
-          library(stars)
-          library(raster)
-          library(tidyverse)
-          library(sf)
-          library(data.table)
-          # message( paste0(ctg$gfdr))
-          tictoc:: tic("processing las file")
+                     lasdata <-   lapply(las_list, function(ctg){
+                       expr <- tryCatch({
+                         library("lidR")
+                         library("rgdal")
+                         library(sfheaders)
+                         library(stars)
+                         library(raster)
+                         library(tidyverse)
+                         library(sf)
+                         library(data.table)
 
-          # opt_output_files(ctg) <- paste0(tempdir(), "{*}_ctfied")
-          # opt_chunk_size(ctg) <- 0
-          # opt_chunk_buffer(ctg) <- 40
-          # classified_ctg <- classify_ground(ctg, csf())
-          # dtm <- rasterize_terrain(classified_ctg, 1, tin())
-          tictoc:: tic("processing dtm")
-          ctg$overwrite <- TRUE
-          opt_output_files(ctg) <-paste0(tempdir(),rnorm(1), input$wscontro,input$hmincor ,"/{ORIGINALFILENAME}_{ID}")
+                         tictoc:: tic("processing las file")
+                         tictoc:: tic("processing dtm")
+                         ctg$overwrite <- TRUE
+                         opt_output_files(ctg) <-paste0(tempdir(),rnorm(1), input$wscontro,input$hmincor ,"/{ORIGINALFILENAME}_{ID}")
 
-          opt_chunk_size(ctg) <- 0
-          opt_chunk_buffer(ctg) <- 20
-          classified_ctg <- classify_ground(ctg, csf())
-          dtm <- rasterize_terrain(classified_ctg, 1, tin())
-          tictoc:: toc()
-          tictoc:: tic("processing normalize_h")
-          ctg_norm <- normalize_height(classified_ctg, dtm)
-          opt_select(ctg_norm) <- "xyz"
-          opt_filter(ctg_norm) <- "-keep_first"
-          hmean3 <- pixel_metrics(ctg_norm, ~mean(Z), 0.2)
-          tictoc:: toc()
-          hmean3[hmean3 < 0.1] <- NA
+                         opt_chunk_size(ctg) <- 0
+                         opt_chunk_buffer(ctg) <- 20
+                         classified_ctg <- classify_ground(ctg, csf())
+                         dtm <- rasterize_terrain(classified_ctg, 1, tin())
+                         tictoc:: toc()
+                         tictoc:: tic("processing normalize_h")
+                         ctg_norm <- normalize_height(classified_ctg, dtm)
+                         opt_select(ctg_norm) <- "xyz"
+                         opt_filter(ctg_norm) <- "-keep_first"
+                         hmean3 <- pixel_metrics(ctg_norm, ~mean(Z), 0.2)
+                         tictoc:: toc()
+                         hmean3[hmean3 < 0.1] <- NA
 
-          # plot(hmean3, col = height.colors(25))
-
-          tictoc:: tic("processing ttops")
-          ctg_norm$overwrite <- TRUE
-          opt_output_files(ctg_norm) <-''
-          # ctg_norm@output_options$drivers$Raster$param$overwrite <- TRUE
-          # ttops <- locate_trees(ctg_norm, lmf(ws= kwsindice , hmin = hmin))
-          ttops <- locate_trees(hmean3,  lmf(ws= input$wscontro , hmin = input$hmincor))
+                         tictoc:: tic("processing ttops")
+                         ctg_norm$overwrite <- TRUE
+                         opt_output_files(ctg_norm) <-''
+                         ttops <- locate_trees(hmean3,  lmf(ws= input$wscontro , hmin = input$hmincor))
 
 
-          tictoc:: toc()
-          tictoc:: tic("processing chm")
-          chm <- rasterize_canopy(ctg_norm, 0.2, p2r(0.15))
-          tictoc:: toc()
-          # plot(chm, col = height.colors(50))
-          tictoc:: tic("processing segment_trees")
-          # ctg_norm$overwrite <- TRUE
-          opt_output_files(ctg_norm) <-paste0(tempdir(),rnorm(1),input$wscontro,input$hmincor,'{ORIGINALFILENAME}_{XCENTER}_{ID}' )
-          algo <- dalponte2016(chm, ttops)
-          ctg_segmented <- segment_trees(ctg_norm, algo)
-          tictoc:: toc()
-          ctg_segmented
-          # ctg_segmented$overwrite <- TRUE
-          opt_output_files(ctg_segmented) <- ''
-          crown_polo = crown_metrics(ctg_segmented, func = .stdtreemetrics, geom = "convex")
-          # plot(sf::st_geometry(crown_polo), col = pastel.colors(250), axes = T)
+                         tictoc:: toc()
+                         tictoc:: tic("processing chm")
+                         chm <- rasterize_canopy(ctg_norm, 0.2, p2r(0.15))
+                         tictoc:: toc()
+                         tictoc:: tic("processing segment_trees")
+                         opt_output_files(ctg_norm) <-paste0(tempdir(),rnorm(1),input$wscontro,input$hmincor,'{ORIGINALFILENAME}_{XCENTER}_{ID}' )
+                         algo <- dalponte2016(chm, ttops)
+                         ctg_segmented <- segment_trees(ctg_norm, algo)
+                         tictoc:: toc()
+                         opt_output_files(ctg_segmented) <- ''
+                         crown_polo = crown_metrics(ctg_segmented, func = .stdtreemetrics, geom = "convex")
+                         directions_longlat <-  st_transform(crown_polo, '+proj=longlat +datum=WGS84 +no_defs')
+                         sf  <- st_as_sf(directions_longlat)
+                         sf  <- sf%>% dplyr:: select(treeID,convhull_area)
+                         chm2 <- terra::project(chm, '+proj=longlat +datum=WGS84 +no_defs')
 
-          #
-          directions_longlat <-  st_transform(crown_polo, '+proj=longlat +datum=WGS84 +no_defs')
-          #
-          sf  <- st_as_sf(directions_longlat)
-          sf  <- sf%>% dplyr:: select(treeID,convhull_area)
-          # sf33 <- as.data.frame(crown_polo)
-          # sf33 <- sf33%>%dplyr:: select(treeID,Z,convhull_area) %>% as.data.frame()
-          # dtm2 <- terra::project(dtm, '+proj=longlat +datum=WGS84 +no_defs')
-          chm2 <- terra::project(chm, '+proj=longlat +datum=WGS84 +no_defs')
+                         lidR:::catalog_laxindex(ctg_segmented)
+                         tem3 <- list(crown_polo,sf,chm2,ctg_segmented)
+                         names(tem3) <- c('crown_polo','sf','chm2','ctg_segmented')
+                         return(tem3)
+                       },error = function(e) {
+                         message('Caught an error!')
+                         cat("ERROR :", conditionMessage(e), "\n")
+                         print(e)},
+                       print(paste("processing Loop", names(las_list), sep = "_")))
+                     }) %>%  unlist(recursive = F)
 
-
-
-          # tictoc:: tic("processing clip_roi")
-          lidR:::catalog_laxindex(ctg_segmented)
-          # opt_output_files(ctg_segmented) <-paste0(tempdir(),
-          #                                          '{XCENTER}' )
-          # subset3 <- lidR::clip_roi(ctg_segmented,df)
-          # tictoc:: toc()
-
-          # tem3 <- list(crown_polo,sf,chm2,ctg_segmented,subset3)
-          # names(tem3) <- c('crown_polo','sf','chm2','ctg_segmented','subset3')
-          tem3 <- list(crown_polo,sf,chm2,ctg_segmented)
-          names(tem3) <- c('crown_polo','sf','chm2','ctg_segmented')
-          return(tem3)
-
-
-
-          # library(data.table)
-          # library(terra)
-          # # fd1 <- dsf_list
-          # # [names(dsf_list) ==ctg$gfdr]
-          # low <- rast(dsf_list[[1]]  )
-          # chm23 <-  terra::resample(chm2,low, method = 'near')
-          # # plot(chm23, col = height.colors(50))
-          # # plot(chm2, col = height.colors(50))
-          # library(exactextractr)
-          # prec_chm <- exactextractr::exact_extract(chm23, sf, include_xy=T) %>%
-          #   setNames(sf$treeID ) %>%
-          #   invoke(rbind,.)%>%
-          #   dplyr:: select(1:3) %>%
-          #   as.data.frame()
-          # names(prec_chm)[1] <- 'chm'
-          # prec_chm <-  prec_chm %>%
-          #   mutate(treeID =  sapply(strsplit( rownames(prec_chm),'[.]'), function(x){
-          #     y=x[1]
-          # }))
-
-
-        },error = function(e) {
-          message('Caught an error!')
-          cat("ERROR :", conditionMessage(e), "\n")
-          print(e)},
-        print(paste("processing Loop", names(las_list), sep = "_")))
-      }) %>%  unlist(recursive = F)
-
-      lasdata })
+                     lasdata })
     })
 
 
@@ -1235,7 +1082,7 @@ SpecexR_app <- function(...) {
 
       filename <- function() {
         "Data_shpExport.zip"
- },
+      },
       content = function(file) {
         withProgress(message = "Exporting Data", {
           library(sf)
@@ -1266,22 +1113,6 @@ SpecexR_app <- function(...) {
 
 
 
-    # output$sf_data <- downloadHandler(
-    #
-    #   filename = "exported_shaefile",
-    #   content = function(file) {
-    #     withProgress(message = 'Downloading',
-    #                  detail = 'please wait...', value = 0, {
-    #                    crowte <- adrarr()$crown_polo
-    #                    # crowte <-  st_as_sf(crowte)
-    #                    # sf::st_write(crowte,file , layer_options = "GEOMETRY=AS_XY" )
-    #                    st_write(crowte, dsn=file , delete_layer = TRUE,layer="exported_shapefile", driver="ESRI Shapefile")
-    #
-    #                  })
-    #   }
-    #
-    # )
-
     adrarr <- eventReactive(input$statdata, {
       sele <- mult()
       sele
@@ -1292,80 +1123,72 @@ SpecexR_app <- function(...) {
 
     data_ext2  <- reactive({
       dsf1 <- getData()
-      dsf1 <-  dsf1  %>%  do.call(c,.)
+
       if (is.null(dsf1))
         return('please upload raster images')
-      # if (is.null(las_12))
-      #   return('please upload las cloud data')
 
-      # dsf_list <- list(dsf1)
-      # par(mfrow = c(2,3))
-      # chm2 <- mult()$chm2
-      # sf <- mult()$sf
       withProgress(message = 'Extraction in progress',
                    detail = 'Time consuming...,please wait', value = 0, {
-      crowte  <- adrarr()$crown_polo
-      ctg_segmented <- adrarr()$ctg_segmented
-      # crff  <- crowte$treeID
-      ########### the first way
-      # tictoc::tic('project time')
-      def <- st_crs(ctg_segmented)
-      # def$input
-      # sf2  <-  crowte %>% dplyr:: filter(treeID == input$select2)
-      pr <- terra::project(dsf1,def$input,res=0.1)
-      # tictoc:: toc()
-      crff  <- 1:length (crowte$treeID)
-      crown_se  <- lapply(crff, function(fdx){
-        expr <- tryCatch({
+                     crowte  <- adrarr()$crown_polo
+                     ctg_segmented <- adrarr()$ctg_segmented
 
-          sf2  <-  crowte %>% dplyr:: filter(treeID == fdx)
-          subset3 <- clip_roi(ctg_segmented, sf2)
-          # las3 = readLAS(subset3$filename[fdx])
+                     def <- st_crs(ctg_segmented)
 
-          fer <- payload(subset3)  %>% dplyr::select(X,Y,Z,treeID)
-          fer$treeID <- as.factor(fer$treeID)
-          names(fer) <- c('x','y','z','treeID')
-          fer <- as.data.frame(fer)
-          #
-          message(paste0('project',fdx))
-          #
-          dsta <- terra::extract(pr,fer[,c('x','y')],xy=T ) %>% mutate(treeID=fer$treeID,
-                                                                       Z=fer$z,
-                                                                       area=sf2$convhull_area
-          ) %>%drop_na()
-          return(dsta)
+                     pr <- terra::project(dsf1,def$input,res=0.1)
 
-        },error = function(e){
-          message('Caught an error!')
-          paste(NaN)
-          # print(e)
-        })
-      }) %>% invoke(rbind,.)  %>% as.data.frame()%>% mutate_if(is.character,as.numeric)
+                     crff  <- 1:length (crowte$treeID)
+                     crown_se  <- lapply(crff, function(fdx){
+                       expr <- tryCatch({
 
-      crown_se
-    })
+                         sf2  <-  crowte %>% dplyr:: filter(treeID == fdx)
+                         subset3 <- clip_roi(ctg_segmented, sf2)
+
+                         fer <- payload(subset3)  %>% dplyr::select(X,Y,Z,treeID)
+                         fer$treeID <- as.factor(fer$treeID)
+                         names(fer) <- c('x','y','z','treeID')
+                         fer <- as.data.frame(fer)
+
+                         message(paste0('project',fdx))
+
+                         dsta <- terra::extract(pr,fer[,c('x','y')],xy=T ) %>% mutate(treeID=fer$treeID,
+                                                                                      Z=fer$z,
+                                                                                      area=sf2$convhull_area
+                         ) %>%drop_na()
+                         return(dsta)
+
+                       },error = function(e){
+                         message('Caught an error!')
+                         paste(NaN)
+
+                       })
+                     }) %>% invoke(rbind,.)  %>% as.data.frame()%>% mutate_if(is.character,as.numeric)
+
+                     crown_se
+                   })
 
     })
 
 
     sertree  <-  reactive({
       withProgress(message = 'Ploting',
-                   detail = 'May take a while...', value = 0, {
-      crowte  <- adrarr()$crown_polo
-      ctg_segmented <- adrarr()$ctg_segmented
-      # crowte  <- list( crowte)
-      # crown_se  <- lapply(crowte, function(x){
+                   detail = 'May take a while...',
+                   value = 0,
+                   {
+                     crowte  <- adrarr()$crown_polo
+                     ctg_segmented <- adrarr()$ctg_segmented
+                     sf2  <-
+                       crowte %>% dplyr::filter(treeID == input$select2)
+                     subset3 <- clip_roi(ctg_segmented, sf2)
+                     subset2 <-
+                       filter_poi(subset3, Z >= input$heightdata)
 
-      sf2  <-  crowte %>% dplyr:: filter(treeID == input$select2)
-
-      subset3 <- clip_roi(ctg_segmented, sf2)
-      subset2 <- filter_poi(subset3, Z >= input$heightdata)
-      # input$heightdata
-      sp::plot(subset2, bg = "white", size = input$poinsize, axis = TRUE, legend = TRUE)
-
-      # })
-
-      # crown_se
+                     sp::plot(
+                       subset2,
+                       bg = "white",
+                       size = input$poinsize,
+                       axis = TRUE,
+                       legend = TRUE
+                     )
                    })
 
     })
@@ -1376,7 +1199,6 @@ SpecexR_app <- function(...) {
 
     randse <- eventReactive(input$dodo1, {
       sele <- sertree()
-
     })
 
     output$contents  <- renderPlot({
@@ -1401,27 +1223,18 @@ SpecexR_app <- function(...) {
 
     })
 
-
-
-
-
-
     plot23  <- reactive({
       fdff <- adrarr()$crown_polo
       if (is.null(fdff))
         return(NULL)
-      # dre <- lapply(fdff, function(xx){
+
       idnum <- fdff[fdff$treeID ==  input$select2,]
       p1<-  ggplot() + geom_sf(data = fdff)+
         geom_sf(data = idnum,col='red')+
-        # geom_sf_text(data=xx, aes(label = treeID),size=2)+
-
         geom_sf_text(data=idnum, aes(label = treeID),col='red',size=6)+
         labs(title = paste0('Total trees count:', length(fdff$treeID))  )+
-      theme(plot.title = element_text(size = 20, face = "bold"))
+        theme(plot.title = element_text(size = 20, face = "bold"))
       p1
-      # })
-      # dre
 
     })
 
@@ -1429,48 +1242,20 @@ SpecexR_app <- function(...) {
       fdff <- adrarr()$crown_polo
       if (is.null(fdff))
         return(NULL)
-      # dre <- lapply(fdff, function(xx){
-      # idnum <- fdff[fdff$treeID ==  input$select2,]
+
       p1<-  ggplot() + geom_sf(data = fdff)+
-        # geom_sf(data = idnum,col='red')+
-        # geom_sf_text(data=xx, aes(label = treeID),size=2)+
 
         geom_sf_text(data=fdff, aes(label = treeID),col='red',size=1.8)
       p1
 
 
-      # })
-      # dre
-
     })
-
-    # output$downloadsfall2  <- downloadHandler(
-    #   filename = function() {
-    #     x <- gsub(":", ".", Sys.time())
-    #     paste("spetral_", gsub("/", "-", x), ".png", sep = "")
-    #   },
-    #   content = function(file) {
-    #
-    #     png(file, width = input$width_png3, height = input$height_png3, res = input$resolution_PNG3)
-    #     print(plot2())
-    #     dev.off()
-    #   },
-    #
-    #   contentType = "application/png"
-    #
-    # )
-
-
-
 
 
     output$predictPlot5  <- renderPlot({
       fdff2 <-  plot23()
       print(fdff2)
-      # fdff2
     })
-
-
 
     output$downloadsfall  <-  downloadHandler(
 
@@ -1482,9 +1267,9 @@ SpecexR_app <- function(...) {
       content = function(file) {
         withProgress(message = 'Downloading',
                      detail = 'please wait...', value = 0, {
-        png(file, width = input$width_png3, height = input$height_png3, res = input$resolution_PNG3)
-        print(plot2())
-        dev.off()
+                       png(file, width = input$width_png3, height = input$height_png3, res = input$resolution_PNG3)
+                       print(plot2())
+                       dev.off()
                      })
       },
 
@@ -1496,13 +1281,8 @@ SpecexR_app <- function(...) {
 
 
     rgbplotwithid  <- reactive({
-      # mult()$crown_polo
-      # # sfff <- sflas()
-      # sfff <-  sflas3()
-
-       sfff1 <- adrarr()$sf
-      select23 <-  getData()
-      dsf21 <-  select23  %>%  do.call(c,.)
+      sfff1 <- adrarr()$sf
+      dsf21 <-  getData()
       if (is.null(sfff1))
         return(NULL)
       if (is.null(dsf21))
@@ -1512,56 +1292,42 @@ SpecexR_app <- function(...) {
       if(terra::nlyr(se2) < 3){
 
         tryCatch({
-         sp:: plot(se2[[1]] ,col= viridis(200) )
-
-        # lapply(sfff1,function(xyxy){
-        idnum <- sfff1[sfff1$treeID ==  input$select2,]
-        # p1<-  ggplot() + geom_sf(data = xyxy)+
-        #   geom_sf(data = idnum,col='red')+
-        #   # geom_sf_text(data=xx, aes(label = treeID),size=2)+
-        #
-        #   geom_sf_text(data=idnum, aes(label = treeID),col='red',size=2)
-        # p1
-
-        sp::plot(sfff1,border='red', add=T,col=NA,alpha=0.4)
-
-        idnum <- sfff1[sfff1$treeID == input$select2,]
-        sp::plot(idnum, add=T,alpha=0.4,col='orange')
-        text(idnum, paste(idnum$treeID ),
-             cex=1,col='blue' )
+          sp:: plot(se2[[1]] ,col= viridis(200) )
+          idnum <- sfff1[sfff1$treeID ==  input$select2,]
+          sp::plot(sfff1,border='red', add=T,col=NA,alpha=0.4)
+          idnum <- sfff1[sfff1$treeID == input$select2,]
+          sp::plot(idnum, add=T,alpha=0.4,col='orange')
+          text(idnum, paste(idnum$treeID ),
+               cex=1,col='blue' )
         },
         error=function(cond) {
-          # debug_msg(cond$message)
           message("Warning: please upload raster images" )
           print( "Warning: please upload raster images" )
         })
-        # })
       } else{
         tryCatch({
-        # lapply(sfff1,function(xyxy){
-        library(RStoolbox)
-        idnum <- sfff1[sfff1$treeID == input$select2,]
-        p <-ggRGB(se2,  stretch = "hist")+
-          geom_sf(data = sfff1, fill=NA,col='red' )+
-          geom_sf(data = idnum, fill='orange')+
-          ggrepel::geom_label_repel(
-            data = idnum,
-            aes(label = treeID, geometry = geometry),
-            stat = "sf_coordinates",
-            min.segment.length = 0,
-            colour = "red",
-            segment.colour = "orange"
-          )
+          library(RStoolbox)
+          idnum <- sfff1[sfff1$treeID == input$select2,]
+          p <-ggRGB(se2,  stretch = "hist")+
+            geom_sf(data = sfff1, fill=NA,col='red' )+
+            geom_sf(data = idnum, fill='orange')+
+            ggrepel::geom_label_repel(
+              data = idnum,
+              aes(label = treeID, geometry = geometry),
+              stat = "sf_coordinates",
+              min.segment.length = 0,
+              colour = "red",
+              segment.colour = "orange"
+            )
 
 
-        print(p)
+          print(p)
 
-      },
-      error=function(cond) {
-        # debug_msg(cond$message)
-        message("Warning: please upload raster images" )
-        print( "Warning: please upload raster images" )
-      })
+        },
+        error=function(cond) {
+          message("Warning: please upload raster images" )
+          print( "Warning: please upload raster images" )
+        })
       }
 
     })
@@ -1570,16 +1336,13 @@ SpecexR_app <- function(...) {
     output$warnpredict  <- renderPrint({
       sfff1 <- adrarr()$sf
       select23 <-  getData()
-      rasterDF <-  try (select23  %>%  do.call(c,.))
+      rasterDF <-  try (select23   )
 
-        if (inherits(rasterDF, "try-error")){stop(print( "Warning: please upload raster images" ))}
+      if (inherits(rasterDF, "try-error")){stop(print( "Warning: please upload raster images" ))}
 
 
     })
 
-
-
-    #
     output$downloadrgball  <- downloadHandler(
 
 
@@ -1590,19 +1353,15 @@ SpecexR_app <- function(...) {
       content = function(file) {
         withProgress(message = 'Downloading',
                      detail = 'please wait...', value = 0, {
-        # rgbg <- rgbplotwithid()
-        png(file, width = input$width_png3, height = input$height_png3, res = input$resolution_PNG3)
-        print(rgbplotwithid())
-        dev.off()
-        })
+                       png(file, width = input$width_png3, height = input$height_png3, res = input$resolution_PNG3)
+                       print(rgbplotwithid())
+                       dev.off()
+                     })
       } ,
 
       contentType = "application/png"
 
     )
-
-
-
 
     output$predictPlo  <- renderPlot({
       rgbplotwithidw<- rgbplotwithid()
@@ -1616,7 +1375,6 @@ SpecexR_app <- function(...) {
       dsf1 <-  data_ext2()
       if (is.null(dsf1))
         return(NULL)
-      # data_Jan <- dsf1  %>% as.data.frame()
       names(dsf1) <-  gsub('[.]|tif','',names(dsf1))
       dsf1 <- dsf1 %>% dplyr::select( x,y, treeID,Z,area, everything())
       dsf1 <- dsf1 %>% dplyr::select(-ID)  %>% drop_na()
@@ -1624,19 +1382,15 @@ SpecexR_app <- function(...) {
 
     output$tife_data <- downloadHandler(
 
-                     filename = "finaloutput data.rds",
+      filename = "finaloutput data.rds",
       content = function(file) {
         withProgress(message = 'Downloading',
                      detail = 'please wait...', value = 0, {
-        readr::write_rds(finaldata(), file)
+                       readr::write_rds(finaldata(), file)
                      })
-        }
+      }
 
     )
-
-
-
-
 
     output$predictPlot3  <- renderPlot({
       library(tidyverse)
@@ -1688,13 +1442,13 @@ SpecexR_app <- function(...) {
 
       if (!inherits(rasterDF, "try-error")){
 
-        if (nlayers(rasterDF) <= 3) {
+        if (terra::nlyr(rasterDF) <= 3) {
           print("at least 3 layers needed for RGB plot")
           sp:: plot(rasterDF ,col= viridis(200))
 
         } else{
 
-          if (nlayers(rasterDF)>3|nlayers(rasterDF)< 5) {
+          if (terra::nlyr(rasterDF)>3|terra::nlyr(rasterDF)< 5) {
             df <-  ggRGB(rasterDF,  3, 5, 4,
                          stretch = 'lin') + ggtitle(paste0('tree ID-', input$select2))
             print(df)
@@ -1713,13 +1467,13 @@ SpecexR_app <- function(...) {
         e <- extent(matou_vis2[,1:2])
         r <- raster(e, ncol=40, nrow=40)
         rasterDF <- rasterize(matou_vis2[, 1:2], r, matou_vis2[,-c(1:2)])
-        if (nlayers(rasterDF) <= 3) {
+        if (terra::nlyr(rasterDF) <= 3) {
           print("at least 3 layers needed for RGB plot")
           sp:: plot(rasterDF ,col= viridis(200))
 
         } else{
 
-          if (nlayers(rasterDF)>3|nlayers(rasterDF)< 5) {
+          if (terra::nlyr(rasterDF)>3|terra::nlyr(rasterDF)< 5) {
             df <-  ggRGB(rasterDF,  3, 5, 4,
                          stretch = 'lin') + ggtitle(paste0('tree ID-', input$select2))
             print(df)
@@ -1735,9 +1489,6 @@ SpecexR_app <- function(...) {
         }
       }
 
-
-
-
       library(RStoolbox)
       library(rasterVis)
       library(viridis)
@@ -1750,8 +1501,6 @@ SpecexR_app <- function(...) {
         return('please upload las cloud data')
       las_12 <- lapply(inFile$datapath,function(m){
         fdd <- lidR::readLAS(m )
-        # fdd$gfdr <- 'month'
-
       } )
 
       las_12
@@ -1761,8 +1510,8 @@ SpecexR_app <- function(...) {
     randomVals <- eventReactive(input$dodo, {
       withProgress(message = 'Ploting',
                    detail = 'May take a while...', value = 0, {
-      sele <- dfpoint()
-      sele <-  sele  %>%  do.call(c,.)
+                     sele <- dfpoint()
+                     sele <-  sele  %>%  do.call(c,.)
                    })
     })
 
@@ -1772,9 +1521,7 @@ SpecexR_app <- function(...) {
       dsf331 <- finaldata()
       print(dsf331)
 
-
     })
-
 
     output$contents22 <- renderPrint({
       library("lidR")
@@ -1788,7 +1535,6 @@ SpecexR_app <- function(...) {
       })
       lapy
     })
-
 
     red2 <-  reactive({
       library(raster)
@@ -1897,83 +1643,35 @@ SpecexR_app <- function(...) {
 
     })
 
-#
-#     output$warning  <- renderPrint({
-#
-#       rasterDF <-  try (pyt())
-#       if (inherits(rasterDF, "try-error")){stop(print( "Warning: please upload all images" ))}
-#
-#
-
-
-      # tryCatch({
-      #
-      #                  library(RStoolbox)
-      #                  library(raster)
-      #                  print(pyt())
-      # },
-      # error=function(cond) {
-      #   # debug_msg(cond$message)
-      #    message("Warning: please upload all images" )
-      #   print( "Warning: please upload all images" )
-      # })
-
-    # })
-
-    # output$warning1  <- renderPrint({
-    #    tryCatch({
-    #
-    #     library(RStoolbox)
-    #     library(raster)
-    #     print(dat243())
-    #   },
-    #   error=function(cond) {
-    #     # debug_msg(cond$message)
-    #      message("Warning: please upload all images" )
-    #     print( "Warning: please upload all images"  )
-    #   })
-    #
-    # })
-
-
-
-
     output$plotgraph1 <- renderPlot({
 
 
       withProgress(message = 'ggRGB Ploting',
                    detail = 'May take a while...', value = 0, {
 
-     rasterDF <-  try (pyt())
-     if (inherits(rasterDF, "try-error")){stop(print( "Warning: please upload all images" ))}else{
-       library(RStoolbox)
-       library(raster)
-       pyt2 <-  RStoolbox::ggRGB(rasterDF,
+                     rasterDF <-  try (pyt())
+                     if (inherits(rasterDF, "try-error")){stop(print( "Warning: please upload all images" ))}else{
+                       library(RStoolbox)
+                       library(raster)
+                       pyt2 <-  RStoolbox::ggRGB(rasterDF,
 
-                                 stretch  = 'hist')
-       print(pyt2)
+                                                 stretch  = 'hist')
+                       print(pyt2)
 
-
-     }
-
-
-      })
-
+                     }
+                   })
     })
 
 
-
     output$plotgraph2 <- renderPlot({
-
       withProgress(message = 'VIs Ploting',
                    detail = 'May take a while...', value = 0, {
 
-   rasterDF <-  try (dat243())
-      if (inherits(rasterDF, "try-error")){stop(print( "Warning: please upload all images" ))}else{
-      library(RStoolbox)
-       library(raster)
-        sp::plot(dat243())}
-
+                     rasterDF <-  try (dat243())
+                     if (inherits(rasterDF, "try-error")){stop(print( "Warning: please upload all images" ))}else{
+                       library(RStoolbox)
+                       library(raster)
+                       sp::plot(dat243())}
                    })
 
 
@@ -1987,9 +1685,9 @@ SpecexR_app <- function(...) {
       content = function(file) {
         withProgress(message = 'Downloading',
                      detail = 'please wait...', value = 0, {
-        r <- dat243()
-        res <- writeRaster(r, filename=file, format="GTiff", overwrite=TRUE)
-        print(res@file@name)
+                       r <- dat243()
+                       res <- writeRaster(r, filename=file, format="GTiff", overwrite=TRUE)
+                       print(res@file@name)
                      })
       }
 
@@ -2008,18 +1706,11 @@ SpecexR_app <- function(...) {
                      {
                        r <- pyt()
                        res <- writeRaster(r,
-                                     filename = file,
-                                     format = "GTiff",
-                                     overwrite = TRUE)
-                       # print(res@file@name)
-                       # pdf(file, width  = input$width_pdf, height  = input$height_pdf )
-                       # pf<-  ggRGB(pyt(), stretch  = 'hist')
-                       # print(pf)
-                       # dev.off()
-
+                                          filename = file,
+                                          format = "GTiff",
+                                          overwrite = TRUE)
                      })
       }
-      # ,  contentType = "application/pdf"
     )
 
 
@@ -2029,11 +1720,3 @@ SpecexR_app <- function(...) {
   runApp(app, launch.browser = TRUE)
 
 }
-
-
-SpecexR_app()
-
-
-
-
-
